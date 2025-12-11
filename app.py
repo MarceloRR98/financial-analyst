@@ -2,7 +2,7 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 from utils.file_parser import parse_excel, parse_pdf
-from utils.analysis import analyze_report, scan_pdf_reports
+from utils.analysis import analyze_report, scan_pdf_reports, scan_excel_reports
 import pandas as pd
 from datetime import datetime
 import json
@@ -62,20 +62,29 @@ if uploaded_file and api_key:
                 parsed_data = parse_excel(uploaded_file)
                 st.success("Excel file parsed successfully!")
                 
-                # Show preview of data
+                
+                # --- EXCEL SHEET SELECTION ---
+                st.divider()
+                st.subheader("📂 Configuración de Lectura")
+                
+                sheet_names = list(parsed_data.keys())
+                analysis_scope = st.radio("Alcance del Análisis:", ["Analizar Todo el Archivo", "Seleccionar Hoja Específica"])
+                
+                if analysis_scope == "Seleccionar Hoja Específica" and len(sheet_names) > 0:
+                    selected_sheet = st.selectbox("Selecciona la hoja a analizar:", sheet_names)
+                    # Filter parsed_data to keep only the selected sheet
+                    parsed_data = {selected_sheet: parsed_data[selected_sheet]}
+                    st.info(f"✅ Se limitará el análisis a la hoja: **{selected_sheet}**")
+                
+                # Show preview of data (Filtered or Full)
+                st.text("Vista Previa:")
                 if isinstance(parsed_data, dict):
                     for sheet_name, content in parsed_data.items():
-                        with st.expander(f"Sheet: {sheet_name}"):
-                            st.subheader("Valores")
+                        with st.expander(f"Previsualizar: {sheet_name}"):
                             st.dataframe(content['values'].head())
-                            
                             formulas = content.get('formulas', {})
                             if formulas:
-                                st.subheader("Fórmulas (Primeras 5)")
-                                # Show first 5 formulas as a list/dict
-                                st.write(dict(list(formulas.items())[:5]))
-                            else:
-                                st.info("No se encontraron fórmulas.")
+                                st.write(f"Fórmulas encontradas: {len(formulas)}")
                 
         elif file_extension == "pdf":
             with st.spinner("Extracting text from PDF..."):
@@ -84,17 +93,25 @@ if uploaded_file and api_key:
                 with st.expander("Extracted Text Preview"):
                     st.text(parsed_data[:1000] + "...")
         
-        # --- PDF SCAN & SELECTION LOGIC ---
+        
+        # --- DOC SCAN & SELECTION LOGIC ---
         selected_focus = None
         
-        if file_extension == 'pdf':
+        # Enable scan for both PDF and Excel
+        if file_extension in ['pdf', 'xlsx', 'xls']:
             st.divider()
             st.subheader("🔍 Detección de Reportes")
             
             # Button to trigger scan
-            if st.button("🔎 Escanear contenido del PDF"):
+            if st.button("🔎 Escanear contenido del Documento"):
                 with st.spinner("Analizando estructura del documento..."):
-                    scan_json = scan_pdf_reports(parsed_data, api_key)
+                    
+                    scan_json = ""
+                    if file_extension == 'pdf':
+                        scan_json = scan_pdf_reports(parsed_data, api_key)
+                    else:
+                        # Excel
+                        scan_json = scan_excel_reports(parsed_data, api_key)
                     
                     # Extract JSON block
                     json_match = re.search(r'```json\s*\n(.*?)\n```', scan_json, re.DOTALL)
@@ -136,7 +153,7 @@ if uploaded_file and api_key:
                 else:
                     st.info("🌐 Se analizará todo el documento.")
                     
-        # --- END PDF SCAN LOGIC ---
+        # --- END DOC SCAN LOGIC ---
 
         # Analysis Button
         if st.button("Analyze Report", type="primary"):

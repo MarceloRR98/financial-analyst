@@ -14,13 +14,18 @@ def scan_pdf_reports(data, api_key):
     scan_data = data[:max_chars] + ("..." if len(data) > max_chars else "")
     
     prompt = """
-    Analiza el siguiente texto extraído de un documento PDF que puede contener múltiples reportes financieros.
+    Analiza el siguiente texto extraído de un documento PDF que puede contener múltiples reportes, tablas o cuadros financieros INDEPENDIENTES.
     
-    Tu tarea es IDENTIFICAR y LISTAR todos los reportes individuales encontrados.
+    Tu tarea es IDENTIFICAR y LISTAR todos los reportes, cuadros o tablas individuales encontrados con ALTA GRANULARIDAD.
     
-    Para cada reporte encontrado, proporciona:
-    1. **Nombre/Título**: El título exacto del reporte (ej. "Balance General 2023", "Estado de Resultados", "Análisis de Cartera").
-    2. **Ubicación Aproximada**: Describe dónde inicia (ej. "Inicio del documento", "Hacia la mitad", "Página X (si hay marcadores)").
+    **CRITERIOS DE SEPARACIÓN (MUY IMPORTANTE)**:
+    - Si en una misma página hay dos tablas con títulos diferentes (ej. "Evolución Mensual" y "Índice de Siniestralidad"), CUENTALOS COMO DOS REPORTES DISTINTOS.
+    - Busca TÍTULOS EN MAYÚSCULAS o encabezados claros que denoten el inicio de una nueva tabla o sección.
+    - No agrupes "todo el documento" en uno solo si ves componentes claramente diferenciados.
+
+    Para cada reporte/tabla encontrado, proporciona:
+    1. **Nombre/Título**: El título exacto que aparece arriba de la tabla (ej. "EVOLUCIÓN MENSUAL...", "ÍNDICE DE SINIESTRALIDAD...").
+    2. **Ubicación Aproximada**: Describe dónde está (ej. "Página 3 - Parte Superior", "Página 3 - Parte Inferior").
     3. **Descripción Breve**: De qué trata (2-3 palabras).
     
     Responde ÚNICAMENTE con un bloque de código JSON con esta estructura exacta:
@@ -28,15 +33,18 @@ def scan_pdf_reports(data, api_key):
     [
         {
             "id": 1,
-            "title": "Nombre del Reporte",
-            "location": "Página 1 aprox (Texto 'Balance General')",
-            "description": "Estado de situación financiera"
+            "title": "EVOLUCIÓN MENSUAL DE PRODUCCIÓN Y SINIESTROS",
+            "location": "Página 1 (Superior)",
+            "description": "Tabla de producción mensual"
         },
-        ...
+        {
+            "id": 2,
+            "title": "ÍNDICE DE SINIESTRALIDAD SOAT",
+            "location": "Página 1 (Inferior)",
+            "description": "Cuadro de índices"
+        }
     ]
     ```
-    
-    Si solo hay un único reporte grande, devuelve una lista con un solo elemento.
     
     Texto del documento:
     """ + scan_data
@@ -54,6 +62,87 @@ def scan_pdf_reports(data, api_key):
     except Exception as e:
         return f"Error al escanear el PDF: {str(e)}"
 
+def scan_excel_reports(data, api_key):
+    """
+    Scans an Excel dictionary (sheets -> values) to identify distinct reports.
+    Handles multiple sheets and multiple tables within a single sheet.
+    """
+    client = OpenAI(api_key=api_key)
+    
+    # Prepare data summary for scanning
+    scan_text = ""
+    for sheet_name, content in data.items():
+        scan_text += f"\n--- HOJA: {sheet_name} ---\n"
+        df = content['values']
+        
+        # Add dimensions to help model understand scope
+        scan_text += f"(Dimensiones totales: {df.shape[0]} filas, {df.shape[1]} columnas)\n"
+        
+        # Increase sample size to capture stacked tables (vertical arrangement)
+        # We take up to 400 rows to ensure we see multiple sections if they exist
+        scan_text += df.head(400).to_string() + "\n"
+        
+    prompt = """
+    Analiza la muestra de datos de un archivo EXCEL (las primeras filas de cada hoja). 
+    
+    Tu objetivo es IDENTIFICAR CADA REPORTE INDIVIDUAL presente. Tienes que ser MUY AGUDO detectando si una hoja contiene uno o varios reportes.
+    
+    **GUÍA DE DETECCIÓN (IMPORTANTE)**:
+    
+    **CASO 1: HOJA CON UN SOLO REPORTE (Ej. Balance General)**
+    - Hay un título principal al inicio.
+    - La tabla de datos fluye de manera continua (Activo -> Pasivo -> Patrimonio).
+    - Aunque sea larga, es la misma entidad lógica.
+    - **ACCIÓN**: Reportalo como UN solo ítem. (Título: "Balance General Completo").
+    
+    **CASO 2: REPORTES APILADOS EN LA MISMA HOJA (Ej. Ganancias y Pérdidas por Sectores)**
+    - Ves un primer bloque de datos con su título (ej. "Sector Eléctrico").
+    - Luego hay filas vacías.
+    - Y aparece **OTRO BLOQUE DE TÍTULO** (ej. "Sector Manufacturero" o "Empresas Agrícolas").
+    - **SEÑAL CLAVE**: A menudo se repiten textos como "AL 30 DE JUNIO", "(En bolivianos)" o vuelven a aparecer encabezados de columnas (nombres de empresas) en medio de la hoja.
+    - **ACCIÓN**: Reportalo como DOS (o más) reportes separados.
+      - 1. "Resultados - Sector Eléctrico"
+      - 2. "Resultados - Sector Manufacturero"
+    
+    **Para cada reporte detectado**:
+    1. **Title**: Nombre preciso y distintivo. Si hay varios en la hoja, usa el subtítulo para diferenciarlos.
+    2. **Location**: "Hoja: [Nombre] - Filas aprox [Inicio-Fin]".
+    3. **Description**: Breve descripción del tipo de datos.
+
+    Responde ÚNICAMENTE con JSON válido:
+    ```json
+    [
+        {
+            "id": 1,
+            "title": "Estado de Resultados - Sector Eléctrico",
+            "location": "Hoja: Resultados - Filas 1-35",
+            "description": "Ingresos y gastos sector eléctrico"
+        },
+        {
+            "id": 2,
+            "title": "Estado de Resultados - Sector Manufacturero",
+            "location": "Hoja: Resultados - Filas 40-80",
+            "description": "Ingresos y gastos sector industrial"
+        }
+    ]
+    ```
+    
+    Data del Excel:
+    """ + scan_text[:80000]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Eres un auditor de datos experto en Excel. Identificas tablas y estructuras independientes."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error al escanear Excel: {str(e)}"
+
 def analyze_report(data, file_type, api_key, focus_context=None):
     """
     Analyzes the parsed data using OpenAI.
@@ -61,6 +150,30 @@ def analyze_report(data, file_type, api_key, focus_context=None):
     """
     client = OpenAI(api_key=api_key)
     
+    # --- PRE-PROCESSING & TRUNCATION ---
+    prompt_data = ""
+    
+    if isinstance(data, dict):
+        # Convert Excel dict to string representation for the prompt
+        # Use a compact representation to save tokens
+        for sheet, content in data.items():
+            prompt_data += f"\n--- SHEET: {sheet} ---\n"
+            # Use to_string() of dataframe
+            prompt_data += content['values'].to_string() + "\n"
+    else:
+        # PDF / Text
+        prompt_data = str(data)
+
+    # --- TRUNCATION TO PREVENT TOKEN OVERFLOW ---
+    # Limit reduced to 120k chars because numeric tables have high token density (1 token ~ 2 chars)
+    SAFE_CHAR_LIMIT = 120000
+    
+    if len(prompt_data) > SAFE_CHAR_LIMIT:
+        head_chars = 100000
+        tail_chars = 20000
+        prompt_data = prompt_data[:head_chars] + "\n\n... [DATOS TRUNCADOS POR EXCESO DE LONGITUD] ...\n\n" + prompt_data[-tail_chars:]
+    # ----------------------------------------------
+
     # Context injection if focus is selected
     focus_instruction = ""
     if focus_context:
@@ -204,61 +317,18 @@ def analyze_report(data, file_type, api_key, focus_context=None):
     2. **Análisis Estructural**: Explica cómo dedujiste la jerarquía (Método Aritmético vs Visual).
     3. **BLOQUE CSV**: El código CSV listo para copiar.
     4. **Validación**: Reporte de cualquier inconsistencia aritmética encontrada.
-
     **INSTRUCCIÓN FINAL**:
     Prioriza la COHERENCIA MATEMÁTICA. Si el documento dice "Total = 100" pero los sumandos dan "90", REPORTA la discrepancia en el campo `Explicacion_Validacion` (ej: "ADVERTENCIA: Suma calculada 90 vs Valor reportado 100").
     
     Data:
-    """.format(focus_instruction=focus_instruction, file_type="Excel" if file_type in ['xlsx', 'xls'] else "PDF")
+    {data}
+    """
     
-    data_str = ""
-    if file_type in ['xlsx', 'xls']:
-        # Data is now a dict of sheets with 'values' and 'formulas'
-        for sheet_name, sheet_content in data.items():
-            data_str += f"\n--- Hoja: {sheet_name} ---\n"
-            
-            # Add Values (Limit rows to avoid token overflow)
-            df = sheet_content['values']
-            
-            # Adjust index to match Excel (1-based)
-            # Create a copy to avoid modifying the original cached dataframe if used elsewhere
-            df_display = df.copy()
-            df_display.index = range(1, len(df_display) + 1)
-            
-            if len(df_display) > 300:
-                data_str += "Valores (Primeras 200 filas y últimas 50 filas - Índices coinciden con filas de Excel):\n"
-                data_str += df_display.head(200).to_string() + "\n"
-                data_str += "\n... [Filas ocultas] ...\n"
-                data_str += df_display.tail(50).to_string() + "\n"
-            else:
-                data_str += "Valores (Índices coinciden con filas de Excel):\n"
-                data_str += df_display.to_string() + "\n"
-            # Add Formulas (Limit count)
-            formulas = sheet_content.get('formulas', {})
-            if formulas:
-                data_str += "\nFórmulas encontradas (Muestra de las primeras 200):\n"
-                # Limit formulas too
-                items = list(formulas.items())
-                if len(items) > 200:
-                    for cell, formula in items[:200]:
-                        data_str += f"{cell}: {formula}\n"
-                    data_str += f"... y {len(items) - 200} fórmulas más.\n"
-                else:
-                    for cell, formula in items:
-                        data_str += f"{cell}: {formula}\n"
-            else:
-                data_str += "\nNo se detectaron fórmulas en esta hoja.\n"
-    else:
-        # For PDF, we also need to truncate if it's too long
-        # Approx 4 chars per token. 120k tokens ~ 480k chars.
-        max_chars = 400000
-        if len(data) > max_chars:
-            data_str = data[:max_chars] + "\n... [Texto truncado por longitud] ..."
-        else:
-            data_str = data
-        
-    # Truncate data if it's too long
-    full_prompt = prompt + data_str
+    full_prompt = prompt.format(
+        focus_instruction=focus_instruction,
+        file_type=file_type,
+        data=prompt_data
+    )
     
     try:
         response = client.chat.completions.create(
