@@ -158,46 +158,54 @@ if uploaded_file and api_key:
         # Analysis Button
         if st.button("Analyze Report", type="primary"):
             with st.spinner("Analyzing with OpenAI..."):
-                # Pass selected_focus to analysis
-                analysis_result = analyze_report(parsed_data, file_extension, api_key, focus_context=selected_focus)
-                
-                # Extract CSV from code block - try multiple patterns
-                csv_content = None
-                csv_df = None
-                
-                # Try different regex patterns to extract CSV
-                patterns = [
-                    r'```csv\s*\n(.*?)\n```',  # Standard markdown with newlines
-                    r'```csv\s*\r?\n(.*?)\r?\n```',  # With optional carriage returns
-                    r'```csv(.*?)```',  # Without requiring newlines
-                ]
-                
-                for pattern in patterns:
-                    csv_match = re.search(pattern, analysis_result, re.DOTALL)
-                    if csv_match:
-                        csv_content = csv_match.group(1).strip()
-                        break
-                
-                # If CSV content was found, try to parse it
-                if csv_content:
-                    try:
-                        from io import StringIO
-                        csv_df = pd.read_csv(StringIO(csv_content), on_bad_lines='skip', quotechar='"', skipinitialspace=True, encoding='utf-8')
-                        st.success(f"✅ CSV extraído correctamente ({len(csv_df)} filas)")
-                    except Exception as e:
-                        st.warning(f"CSV encontrado pero no se pudo parsear como DataFrame: {str(e)}")
-                else:
-                    st.warning("⚠️ No se encontró un bloque CSV en la respuesta del análisis")
-                
-                # Save to history
-                report_entry = {
-                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'filename': uploaded_file.name + (f" [{selected_focus}]" if selected_focus else ""),
-                    'analysis': analysis_result,
-                    'csv_content': csv_content,
-                    'csv_df': csv_df
-                }
-                st.session_state.reports_history.append(report_entry)
+                try:
+                    # Pass selected_focus to analysis
+                    analysis_result = analyze_report(parsed_data, file_extension, api_key, focus_context=selected_focus)
+                    
+                    # Extract CSV from code block - try multiple patterns
+                    csv_content = None
+                    csv_df = None
+                    
+                    # Try different regex patterns to extract CSV
+                    patterns = [
+                        r'```csv\s*\n(.*?)\n```',  # Standard markdown with newlines
+                        r'```csv\s*\r?\n(.*?)\r?\n```',  # With optional carriage returns
+                        r'```csv(.*?)```',  # Without requiring newlines
+                    ]
+                    
+                    for pattern in patterns:
+                        csv_match = re.search(pattern, analysis_result, re.DOTALL)
+                        if csv_match:
+                            csv_content = csv_match.group(1).strip()
+                            break
+                    
+                    # If CSV content was found, try to parse it
+                    if csv_content:
+                        try:
+                            from io import StringIO
+                            csv_df = pd.read_csv(StringIO(csv_content), on_bad_lines='skip', quotechar='"', skipinitialspace=True, encoding='utf-8')
+                            st.success(f"✅ CSV extraído correctamente ({len(csv_df)} filas)")
+                        except Exception as e:
+                            st.warning(f"CSV encontrado pero no se pudo parsear como DataFrame: {str(e)}")
+                    else:
+                        st.warning("⚠️ No se encontró un bloque CSV en la respuesta del análisis")
+                    
+                    # Save to history
+                    report_entry = {
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'filename': uploaded_file.name + (f" [{selected_focus}]" if selected_focus else ""),
+                        'analysis': analysis_result,
+                        'csv_content': csv_content,
+                        'csv_df': csv_df
+                    }
+                    st.session_state.reports_history.append(report_entry)
+                    st.success("Analysis complete!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Se produjo un error crítico durante el análisis: {str(e)}")
+                    # Printable stack trace for debugging could go here if needed
+                    # import traceback
+                    # st.text(traceback.format_exc())
                 st.rerun()
                 
     except Exception as e:
